@@ -14,3 +14,8 @@ wget -q -O mallet.tar.gz http://mallet.cs.umass.edu/dist/mallet-2.0.8.tar.gz
 mkdir -p /opt/mallet
 tar -xf mallet.tar.gz -C /opt/mallet --strip-components=1
 rm mallet.tar.gz
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+printf '%s\n' 'DLATK exits with success! A good day indeed ¯\_(ツ)_/¯.'
