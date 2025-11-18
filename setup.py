@@ -229,6 +229,11 @@ if __name__ == "__main__":
         extras_require=EXTRAS_REQUIRE,
         scripts=SCRIPTS,
         python_requires=">=3.8",
+        entry_points={
+        "console_scripts": [
+                "dlatk-check = dlatk._install_msg:main",
+            ],
+        },
     )
 
     # Preserve the original "Colab convenience" cloning safely
