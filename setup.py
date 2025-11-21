@@ -243,8 +243,12 @@ if __name__ == "__main__":
             subprocess.run(["git", "clone", f"{DOWNLOAD_URL}.git", os.path.join(clone_folder, "dlatk")], check=False)
         except Exception:
             pass
-
-    if os.getenv("COLAB_RELEASE_TAG") is not None:
+    try:
+        import google.colab
+        IN_COLAB = True
+    except ImportError:
+        IN_COLAB = False
+    if IN_COLAB:
         try:
             import dlatk  # noqa: F401
             dlatk_path = __import__("dlatk").__path__[0]
