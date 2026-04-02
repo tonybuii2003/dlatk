@@ -45,6 +45,7 @@ except ImportError:
     print('warning: wordcloud not found.')
 
 from dlatk.lexicainterface.lexInterface import LexInterfaceParser
+from dlatk.transformer_pipeline import TransformerPipeline
 
 def getInitVar(variable, parser, default, varList=False):
     if parser:
@@ -781,6 +782,11 @@ def main(fn_args = None):
     group.add_argument('--lda_iterations', type=int, default=dlac.DEF_NUM_ITERATIONS,
                        help="The number of Gibbs sampling iterations to perform. Default: {}"
                        .format(str(dlac.DEF_NUM_ITERATIONS)))
+    group = parser.add_argument_group('Transformer Pipeline Actions', 'Message-level classification using Transformer models.')
+    group.add_argument('--add_transformer_classifier', '--add_tr_class', action='store_true', dest='transformer_classify',
+                       help='Extract logits and probabilities at the message level using a Transformer model.')
+    group.add_argument('--transformer_model', '--tr_model', type=str, metavar='NAME', dest='tr_model',
+                       help='Path or name of the fine-tuned Hugging Face model.')
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -926,7 +932,8 @@ def main(fn_args = None):
                 for featTable in featTable]
     def TE():
         return TopicExtractor(args.dbengine, args.corpdb, args.corptable, args.correl_field, args.mysqlconfigfile, args.message_field, args.messageid_field, dlac.DEF_ENCODING, dlac.DEF_UNICODE_SWITCH, args.ldamsgtbl)
-
+    def TP():
+        return TransformerPipeline(model_path=args.transformer_model_path)
     dlaw = None
     ma = None
     mt = None
@@ -938,6 +945,7 @@ def main(fn_args = None):
     fg = None
     fgs = None #feature getters
     te = None
+    tp = None
 
     # if not fe:
     #  fe = FE()
@@ -1410,6 +1418,25 @@ def main(fn_args = None):
     if args.whitelist:
         if not dlaw: dlaw = DLAW()
         whitelist = dlaw.makeBlackWhiteList(args.feat_whitelist, args.lextable, args.categories)
+    # Transformer Classification Extraction:
+    if args.transformer_classify:
+        if not args.tr_model:
+            dlac.warn("Error: You must specify a model path with --tr_model or --transformer_model")
+            sys.exit(1)
+            
+        # Initialize the FeatureExtractor if not already done
+        if not fe: fe = FE()
+        
+        # This handles inference, table creation, and the native SQL batch writing.
+        table_name = fe.addTrClassTable(
+            modelPath=args.tr_model, 
+            batchSize=args.batchsize, 
+            where=args.groupswhere
+        )
+        
+        # Set this so subsequent actions (like --correlate) know which table to use
+        args.feattable = table_name
+        fg = FG(table_name)
 
     def makeOutputFilename(args, fg=None, og=None, prefix=None, suffix=None):
         if args.outputname:

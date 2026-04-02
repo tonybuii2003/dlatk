@@ -2865,7 +2865,50 @@ class FeatureExtractor(DLAWorker):
         mm.enableTableKeys(self.corpdb, self.dbCursor, outcomeFeatTableName, charset=self.encoding, use_unicode=self.use_unicode, mysql_config_file=self.mysql_config_file)#rebuilds keys
         dlac.warn("Done\n")
         return outcomeFeatTableName;
+    def addTrClassTable(self, modelPath, batchSize=None, where=None):
+        """Runs Transformer classification and writes the table using the native self.qb pattern."""
+        from .transformer_pipeline import TransformerPipeline
+        import os
+        tp = TransformerPipeline(model_path=modelPath)
+        
+        # 1. Fetch data using the DLAWorker base method
+        messages_data = self.getMessages(where=where) 
+        if not messages_data: return None
+        m_ids, texts = [r[0] for r in messages_data], [r[1] for r in messages_data]
 
+        # 2. Run Inference
+        logits, probs = tp.extract_message_features(texts, batch_size=batchSize)
+        dlatk_rows = tp.get_dlatk_rows(m_ids, logits, probs)
+
+        # 3. Create Table (Uses the helper you already have)
+        model_raw = os.path.basename(modelPath.rstrip('/')).replace('-', '_')
+
+        # 2. Truncate the last 2 words (e.g., 'roberta_large')
+        parts = model_raw.split('_')
+        if len(parts) > 2:
+            model_short = '_'.join(parts[:-2])
+        else:
+            model_short = model_raw # Fallback if the name is already short
+        tableName = self.createFeatureTable(
+            featureName=f"tr_classify_{model_short}", 
+            featureType="VARCHAR(128)", 
+            valueType="DOUBLE"
+        )
+
+        # 4. WRITE DATA (Using your self.qb pattern)
+        query = self.qb.create_insert_query(tableName).set_values([
+            ("group_id", ""), ("feat", ""), ("value", ""), ("group_norm", "")
+        ])
+        
+        # Convert dicts to the tuple list the query expects
+        rows = [(str(r['group_id']), r['feat'], r['value'], r['group_norm']) for r in dlatk_rows]
+        
+        batch_size = dlac.MYSQL_BATCH_INSERT_SIZE
+        dlac.warn(f"Writing {len(rows)} rows to {tableName}...")
+        for i in range(0, len(rows), batch_size):
+            query.execute_query(rows[i : i + batch_size])
+            
+        return tableName
     ##TIMEX PROCESSING##
 
     def addTimexDiffFeatTable(self, dateField=dlac.DEF_DATE_FIELD, tableName = None, serverPort = dlac.DEF_CORENLP_PORT):
