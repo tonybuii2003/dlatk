@@ -1974,7 +1974,14 @@ class FeatureExtractor(DLAWorker):
         if correlField == 'state':
             return 'char(2)'
         return None
-
+    
+    def isMessageLevel(self):
+        """Checks if the current grouping is 1-to-1 with messages."""
+        # Query to see if any group_id has more than 1 message
+        sql = f"SELECT MAX(c) FROM (SELECT COUNT(*) as c FROM {self.corptable} GROUP BY {self.correl_field}) as counts"
+        res = self.data_engine.execute_get_list(sql)
+        return res[0][0] == 1
+    
     def createFeatureTable(self, featureName, featureType = 'VARCHAR(64)', valueType = 'INTEGER', tableName = None, valueFunc = None, correlField=None, extension = None):
         """Creates a feature table based on self data and feature name
 
@@ -2865,50 +2872,63 @@ class FeatureExtractor(DLAWorker):
         mm.enableTableKeys(self.corpdb, self.dbCursor, outcomeFeatTableName, charset=self.encoding, use_unicode=self.use_unicode, mysql_config_file=self.mysql_config_file)#rebuilds keys
         dlac.warn("Done\n")
         return outcomeFeatTableName;
-    def addTrClassTable(self, modelPath, batchSize=None, where=None):
-        """Runs Transformer classification and writes the table using the native self.qb pattern."""
+
+    def addHuggingFaceInferenceTable(self, modelPath, ptFile=None, batchSize=None, where=None):
+        """The 'Finisher': Now renamed to HuggingFace Inference."""
         from .transformer_pipeline import TransformerPipeline
         import os
-        tp = TransformerPipeline(model_path=modelPath)
         
-        # 1. Fetch data using the DLAWorker base method
+        # Initialize pipeline (can pass ptFile if your pipeline handles specific weight files)
+        tp = TransformerPipeline(model_path=modelPath) 
+        
         messages_data = self.getMessages(where=where) 
         if not messages_data: return None
         m_ids, texts = [r[0] for r in messages_data], [r[1] for r in messages_data]
 
-        # 2. Run Inference
         logits, probs = tp.extract_message_features(texts, batch_size=batchSize)
         dlatk_rows = tp.get_dlatk_rows(m_ids, logits, probs)
-
-        # 3. Create Table (Uses the helper you already have)
+        
+        # --- DYNAMIC NAMING LOGIC ---
+        prefix = "trcl"
         model_raw = os.path.basename(modelPath.rstrip('/')).replace('-', '_')
+        
+        # Function to build the potential full DLATK name
+        def get_full_name(m_name):
+            # feat$trcl_model$corptable$correl_field
+            return f"feat${prefix}_{m_name}${self.corptable}${self.correl_field}"
 
-        # 2. Truncate the last 2 words (e.g., 'roberta_large')
-        parts = model_raw.split('_')
-        if len(parts) > 2:
-            model_short = '_'.join(parts[:-2])
-        else:
-            model_short = model_raw # Fallback if the name is already short
+        model_parts = model_raw.split('_')
+        full_table_name = get_full_name(model_raw)
+        # Loop: While the name is too long, remove the first word
+        while len(full_table_name) > 64 and len(model_parts) > 1:
+            removed_word = model_parts.pop(0)
+            model_raw = '_'.join(model_parts)
+            full_table_name = get_full_name(model_raw)
+            dlac.warn(f"Table name too long ({len(get_full_name('_'.join([removed_word] + model_parts)))} chars). "
+                      f"Removing '{removed_word}' from start...")
+
+        # Final safety check: if it's STILL too long, hard truncate
+        if len(full_table_name) > 64:
+             model_raw = model_raw[:(64 - len(get_full_name('')))]
+             full_table_name = get_full_name(model_raw)
+        dlac.warn(f"Table Name: {full_table_name} ({len(full_table_name)} chars)")
+
         tableName = self.createFeatureTable(
-            featureName=f"tr_classify_{model_short}", 
+            featureName=f"{prefix}_{model_raw}", 
             featureType="VARCHAR(128)", 
             valueType="DOUBLE"
         )
 
-        # 4. WRITE DATA (Using your self.qb pattern)
+        # Standard self.qb write pattern
         query = self.qb.create_insert_query(tableName).set_values([
             ("group_id", ""), ("feat", ""), ("value", ""), ("group_norm", "")
         ])
-        
-        # Convert dicts to the tuple list the query expects
         rows = [(str(r['group_id']), r['feat'], r['value'], r['group_norm']) for r in dlatk_rows]
-        
         batch_size = dlac.MYSQL_BATCH_INSERT_SIZE
-        dlac.warn(f"Writing {len(rows)} rows to {tableName}...")
         for i in range(0, len(rows), batch_size):
             query.execute_query(rows[i : i + batch_size])
             
-        return tableName
+        return tableName    
     ##TIMEX PROCESSING##
 
     def addTimexDiffFeatTable(self, dateField=dlac.DEF_DATE_FIELD, tableName = None, serverPort = dlac.DEF_CORENLP_PORT):

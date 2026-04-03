@@ -782,11 +782,11 @@ def main(fn_args = None):
     group.add_argument('--lda_iterations', type=int, default=dlac.DEF_NUM_ITERATIONS,
                        help="The number of Gibbs sampling iterations to perform. Default: {}"
                        .format(str(dlac.DEF_NUM_ITERATIONS)))
-    group = parser.add_argument_group('Transformer Pipeline Actions', 'Message-level classification using Transformer models.')
-    group.add_argument('--add_transformer_classifier', '--add_tr_class', action='store_true', dest='transformer_classify',
-                       help='Extract logits and probabilities at the message level using a Transformer model.')
-    group.add_argument('--transformer_model', '--tr_model', type=str, metavar='NAME', dest='tr_model',
-                       help='Path or name of the fine-tuned Hugging Face model.')
+    group = parser.add_argument_group('Transformer Pipeline Actions', 'HuggingFace inference.')
+    group.add_argument('--huggingface_inference', '--hf_inference', action='store_true', dest='hf_inference',
+                       help='Run inference using a HuggingFace model and save results to a feature table.')
+    group.add_argument('--pt_file', type=str, dest='pt_file', default=None,
+                       help='Optional: Path to a specific .pt or .safetensors weights file.')
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -1419,22 +1419,31 @@ def main(fn_args = None):
         if not dlaw: dlaw = DLAW()
         whitelist = dlaw.makeBlackWhiteList(args.feat_whitelist, args.lextable, args.categories)
     # Transformer Classification Extraction:
-    if args.transformer_classify:
-        if not args.tr_model:
-            dlac.warn("Error: You must specify a model path with --tr_model or --transformer_model")
+    # HuggingFace Inference logic
+    if args.hf_inference:
+        if not args.model:
+            dlac.warn("Error: You must specify a model name or path with --model")
             sys.exit(1)
             
-        # Initialize the FeatureExtractor if not already done
         if not fe: fe = FE()
         
-        # This handles inference, table creation, and the native SQL batch writing.
-        table_name = fe.addTrClassTable(
-            modelPath=args.tr_model, 
+        # --- MESSAGE LEVEL CHECK ---
+        # We ensure that for every group_id, there is exactly one message.
+        # This prevents running inference on aggregated user-level data.
+        if not fe.isMessageLevel():
+            dlac.warn(f"Error: --huggingface_inference only supports message-level analysis. "
+                      f"The current grouping (-c {args.correl_field}) results in multiple messages per group. "
+                      f"Please use -c {args.messageid_field} for message-level inference.")
+            sys.exit(1)
+
+        # Cross the finish line
+        table_name = fe.addHuggingFaceInferenceTable(
+            modelPath=args.model, 
+            ptFile=args.pt_file,
             batchSize=args.batchsize, 
             where=args.groupswhere
         )
         
-        # Set this so subsequent actions (like --correlate) know which table to use
         args.feattable = table_name
         fg = FG(table_name)
 
